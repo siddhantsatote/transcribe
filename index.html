@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" href="images/icon48-1.png" type="image/x-icon">
+    <title>Transcribe</title>
+    <style>
+        /* Paste the CSS code here */
+        body {
+            font-family: 'Arial', sans-serif;
+            background-color: #f4f4f4;
+            color: #333;
+            text-align: center;
+            margin: 0;
+            padding: 20px;
+        }
+
+        h1 {
+            color: #007BFF;
+        }
+
+        button {
+            background-color: #007BFF;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            margin: 5px;
+            cursor: pointer;
+            border-radius: 5px;
+        }
+
+        button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+
+        input {
+            width: 80%;
+            padding: 10px;
+            margin: 5px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+        }
+
+        ul {
+            list-style-type: none;
+            padding: 0;
+        }
+
+        li {
+            background-color: #fff;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            margin-top: 10px;
+            padding: 10px;
+        }
+
+        @media only screen and (max-width: 650px){
+            body {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+            font-family: 'Arial', sans-serif;
+            background-color: #f4f4f4;
+            color: #333;
+            text-align: center;
+            margin: 0;
+            padding: 20px;
+        }
+
+        h1 {
+            color: #007BFF;
+        }
+
+        button {
+            width: 95%;
+            background-color: #007BFF;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            margin: 5px;
+            cursor: pointer;
+            border-radius: 5px;
+        }
+
+        button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+
+        input {
+            width: 95%;
+            padding: 10px;
+            margin: 5px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+        }
+
+        ul {
+            list-style-type: none;
+            padding: 0;
+        }
+
+        li {
+            background-color: #fff;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            margin-top: 10px;
+            padding: 10px;
+        }
+        }
+    </style>
+</head>
+<body>
+    <h1>Web Bluetooth Demo</h1>
+    <label for="languageSelect">Select Language:</label>
+    <select id="languageSelect">
+        <option value="en-US">English</option>
+        <option value="mr-IN">Marathi</option>
+    </select>
+    <button id="connectButton">Connect to ESP32</button>
+    <button id="startButton">Start Microphone</button>
+    <button id="closeButton">Close Microphone</button>
+    <input type="text" id="textInput" placeholder="Transcribe text">
+
+    <ul id="outputList"></ul>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const connectButton = document.getElementById('connectButton');
+            const startButton = document.getElementById('startButton');
+            const closeButton = document.getElementById('closeButton');
+            const textInput = document.getElementById('textInput');
+            const outputList = document.getElementById('outputList');
+            const languageSelect = document.getElementById('languageSelect');
+
+            let bluetoothDevice;
+            let bluetoothServer;
+            let bluetoothCharacteristic;
+            let recognition;
+
+            // Load previous conversions from local storage
+            const savedConversions = JSON.parse(localStorage.getItem('conversions')) || [];
+
+            // Display previous conversions
+            savedConversions.forEach(addToList);
+
+            async function connectToDevice() {
+                try {
+                    bluetoothDevice = await navigator.bluetooth.requestDevice({
+                        filters: [{ services: ['0000fff0-0000-1000-8000-00805f9b34fb'] }]
+                    });
+
+                    bluetoothServer = await bluetoothDevice.gatt.connect();
+                    bluetoothCharacteristic = await bluetoothServer.getPrimaryService('0000fff0-0000-1000-8000-00805f9b34fb')
+                        .then(service => service.getCharacteristic('0000fff1-0000-1000-8000-00805f9b34fb'));
+
+                    // Enable the send button after successful connection
+                    sendButton.disabled = false;
+
+                    // Handle notifications (data received from ESP32)
+                    bluetoothCharacteristic.addEventListener('characteristicvaluechanged', (event) => {
+                        const receivedText = new TextDecoder().decode(event.target.value);
+                        const listItemText = 'Received from ESP32: ' + receivedText;
+                        addToList(listItemText);
+
+                        // Save the conversion to local storage
+                        savedConversions.push(listItemText);
+                        localStorage.setItem('conversions', JSON.stringify(savedConversions));
+                    });
+                    await bluetoothCharacteristic.startNotifications();
+                } catch (error) {
+                    console.error('Error connecting to Bluetooth device:', error);
+                }
+            }
+
+            connectButton.addEventListener('click', async () => {
+                await connectToDevice();
+            });
+
+            startButton.addEventListener('click', () => {
+                recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
+                recognition.interimResults = true;
+                recognition.lang = languageSelect.value; // Set the recognition language
+
+                recognition.addEventListener('result', (e) => {
+                    const transcript = Array.from(e.results)
+                        .map(result => result[0])
+                        .map(result => result.transcript)
+                        .join('');
+
+                    textInput.value = transcript;
+
+                    // Automatically send the text to the ESP32
+                    sendTextToESP32(transcript);
+                });
+
+                recognition.addEventListener('end', () => {
+                    if (!closeButton.disabled) {
+                        recognition.start();  // Restart the recognition if not closed
+                    }
+                });
+
+                startButton.disabled = true;
+                closeButton.disabled = false;
+
+                recognition.start();
+            });
+
+            closeButton.addEventListener('click', () => {
+                if (recognition) {
+                    recognition.stop();
+                    closeButton.disabled = true;
+                    startButton.disabled = false;
+                }
+            });
+
+            function sendTextToESP32(text) {
+                if (bluetoothCharacteristic && bluetoothServer.connected) {
+                    const encoder = new TextEncoder('utf-8');
+                    bluetoothCharacteristic.writeValue(encoder.encode(text));
+                }
+            }siddhant
+
+            function addToList(text) {
+                const listItem = document.createElement('li');
+                listItem.textContent = text;
+                outputList.appendChild(listItem);
+            }
+        });
+    </script>
+</body>
+</html>
